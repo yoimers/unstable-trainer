@@ -1,0 +1,32 @@
+# Data, checkpoints, logs
+data
+checkpoints
+.neptune
+.logs
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache
+
+# MacOS
+.DS_Store
+
+# Distribution / packaging
+build/
+dist/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/

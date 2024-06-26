@@ -1,0 +1,21 @@
+meta:
+  wandb: True
+  debug: True
+data:
+  dataset: "/mnt/d/finetune"
+  augmentation:
+    flip: False
+train_loader:
+  batch_size: 32
+  shuffle: True
+  num_workers: 4
+  pin_memory: True
+  persistent_workers: True
+train_loader:
+  batch_size: 32
+  shuffle: False
+  num_workers: 4
+  persistent_workers: True
+model:
+  parameters:
+    input_channels: 4
