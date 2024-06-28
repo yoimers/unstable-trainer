@@ -8,3 +8,4 @@ polars==0.20.31
 tqdm
 torch==2.3.1
 diffusers[torch]==0.29.1
+pot==0.9.4
