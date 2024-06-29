@@ -48,7 +48,4 @@ class LatentNoiseOptimalTransport(Dataset):
         if not self.generated_pairs:
             self._prepare_next_batch()
 
-        if not self.generated_pairs:
-            raise StopIteration
-
         return self.generated_pairs.pop(0)
