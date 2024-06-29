@@ -9,3 +9,6 @@ tqdm
 torch==2.3.1
 diffusers[torch]==0.29.1
 pot==0.9.4
+einops==0.8.0
+sentencepiece==0.2.0
+rich==13.7.1
