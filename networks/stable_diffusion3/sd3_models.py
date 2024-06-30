@@ -156,8 +156,8 @@ class SD3Tokenizer:
 
 
 def get_2d_sincos_pos_embed(
-    embed_dim,
-    grid_size,
+    embed_dim: int,
+    grid_size: int,
     scaling_factor=None,
     offset=None,
 ):
@@ -2250,9 +2250,9 @@ def create_clip_g(
 
 
 def create_t5xxl(
+    state_dict: Optional[Dict[str, torch.Tensor]] = None,
     device="cpu",
     dtype=torch.float32,
-    state_dict: Optional[Dict[str, torch.Tensor]] = None,
 ) -> T5XXLModel:
     T5_CONFIG = {
         "d_ff": 10240,

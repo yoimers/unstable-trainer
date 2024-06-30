@@ -32,10 +32,8 @@ def get_noise(seed: int, latent: torch.Tensor):
     ).to(latent.dtype)
 
 
-def max_denoise(model_sampling: sd3_utils.ModelSamplingDiscreteFlow, sigmas: torch.FloatTensor):
-    max_sigma = float(model_sampling.sigma_max)
-    sigma = float(sigmas[0])
-    return math.isclose(max_sigma, sigma, rel_tol=1e-05) or sigma > max_sigma
+SHIFT_FACTOR = 0.0609
+SCALE_FACTOR = 1.5305
 
 
 def do_sample(
@@ -53,7 +51,9 @@ def do_sample(
 ):
     latent = initial_latent
     if initial_latent is None:
-        latent = torch.ones(1, 16, height // 8, width // 8, device=device) * 0.0609
+        latent = (
+            torch.ones(1, 16, height // 8, width // 8, device=device) * SHIFT_FACTOR
+        )
 
     latent = latent.to(dtype).to(device)
 
@@ -62,18 +62,14 @@ def do_sample(
     model_sampling = sd3_utils.ModelSamplingDiscreteFlow()
 
     sigmas = model_sampling.get_sigmas(steps).to(device)
-    # sigmas = sigmas[int(steps * (1 - denoise)) :] # do not support i2i
 
-    # conditioning = fix_cond(conditioning)
-    # neg_cond = fix_cond(neg_cond)
-    # extra_args = {"cond": cond, "uncond": neg_cond, "cond_scale": guidance_scale}
-
-    noise_scaled = model_sampling.noise_scaling(sigmas[0], noise, latent, max_denoise(model_sampling, sigmas))
+    x = model_sampling.noise_scaling(
+        sigmas[0], noise, latent, model_sampling.max_denoise(sigmas)
+    )
+    x = x.to(device).to(dtype)
 
     c_crossattn = torch.cat([cond[0], neg_cond[0]]).to(device).to(dtype)
     y = torch.cat([cond[1], neg_cond[1]]).to(device).to(dtype)
-
-    x = noise_scaled.to(device).to(dtype)
 
     with torch.no_grad():
         for i in tqdm(range(len(sigmas) - 1)):
@@ -102,9 +98,7 @@ def do_sample(
             x = x.to(dtype)
 
     latent = x
-    scale_factor = 1.5305
-    shift_factor = 0.0609
-    latent = (latent / scale_factor) + shift_factor
+    latent = (latent / SCALE_FACTOR) + SHIFT_FACTOR
     return latent
 
 
@@ -152,7 +146,10 @@ if __name__ == "__main__":
     logger.info(f"Loading SD3 models from {args.ckpt_path}...")
     state_dict = load_file(args.ckpt_path)
 
-    if "text_encoders.clip_g.transformer.text_model.embeddings.position_embedding.weight" in state_dict:
+    if (
+        "text_encoders.clip_g.transformer.text_model.embeddings.position_embedding.weight"
+        in state_dict
+    ):
         # found clip_g: remove prefix "text_encoders.clip_g."
         logger.info("clip_g is included in the checkpoint")
         clip_g_sd = {}
@@ -166,7 +163,10 @@ if __name__ == "__main__":
         for key in list(clip_g_sd.keys()):
             clip_g_sd["transformer." + key] = clip_g_sd.pop(key)
 
-    if "text_encoders.clip_l.transformer.text_model.embeddings.position_embedding.weight" in state_dict:
+    if (
+        "text_encoders.clip_l.transformer.text_model.embeddings.position_embedding.weight"
+        in state_dict
+    ):
         # found clip_l: remove prefix "text_encoders.clip_l."
         logger.info("clip_l is included in the checkpoint")
         clip_l_sd = {}
@@ -180,7 +180,10 @@ if __name__ == "__main__":
         for key in list(clip_l_sd.keys()):
             clip_l_sd["transformer." + key] = clip_l_sd.pop(key)
 
-    if "text_encoders.t5xxl.transformer.encoder.block.0.layer.0.SelfAttention.k.weight" in state_dict:
+    if (
+        "text_encoders.t5xxl.transformer.encoder.block.0.layer.0.SelfAttention.k.weight"
+        in state_dict
+    ):
         # found t5xxl: remove prefix "text_encoders.t5xxl."
         logger.info("t5xxl is included in the checkpoint")
         if not args.do_not_use_t5xxl:
@@ -275,7 +278,7 @@ if __name__ == "__main__":
 
     if use_t5xxl:
         logger.info("Create t5xxl")
-        t5xxl = sd3_models.create_t5xxl(device, sd3_dtype, t5xxl_sd)
+        t5xxl = sd3_models.create_t5xxl(t5xxl_sd, device, sd3_dtype)
 
         logger.info("Loading state dict...")
         info = t5xxl.load_state_dict(t5xxl_sd)
@@ -293,11 +296,15 @@ if __name__ == "__main__":
     # prepare embeddings
     logger.info("Encoding prompts...")
     # embeds, pooled_embed
-    lg_out, t5_out, pooled = sd3_utils.get_cond(args.prompt, tokenizer, clip_l, clip_g, t5xxl)
-    cond = torch.cat([lg_out, t5_out], dim=-2), pooled
+    lg_out, t5_out, pooled = sd3_utils.get_cond(
+        args.prompt, tokenizer, clip_l, clip_g, t5xxl
+    )
+    cond = torch.cat([lg_out, t5_out], dim=-2).to(device), pooled.to(device)
 
-    lg_out, t5_out, pooled = sd3_utils.get_cond(args.negative_prompt, tokenizer, clip_l, clip_g, t5xxl)
-    neg_cond = torch.cat([lg_out, t5_out], dim=-2), pooled
+    lg_out, t5_out, pooled = sd3_utils.get_cond(
+        args.negative_prompt, tokenizer, clip_l, clip_g, t5xxl
+    )
+    neg_cond = torch.cat([lg_out, t5_out], dim=-2).to(device), pooled.to(device)
 
     # generate image
     logger.info("Generating image...")
@@ -326,7 +333,9 @@ if __name__ == "__main__":
     # save image
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+    output_path = os.path.join(
+        output_dir, f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    )
     out_image.save(output_path)
 
     logger.info(f"Saved image to {output_path}")

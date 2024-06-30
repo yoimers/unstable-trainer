@@ -7,7 +7,6 @@ import safetensors
 from safetensors.torch import load_file
 from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
-
 import logging
 
 logger = logging.getLogger(__name__)
@@ -194,7 +193,7 @@ def load_models(
         t5xxl = None
     else:
         logger.info("Building T5XXL")
-        t5xxl = sd3_models.create_t5xxl(t5xxl_device, t5xxl_dtype, t5xxl_sd)
+        t5xxl = sd3_models.create_t5xxl(t5xxl_sd, t5xxl_device, t5xxl_dtype)
         logger.info("Loading state dict...")
         info = t5xxl.load_state_dict(t5xxl_sd)
         logger.info(f"Loaded T5XXL: {info}")
@@ -220,13 +219,9 @@ def get_cond(
     clip_l: sd3_models.SDClipModel,
     clip_g: sd3_models.SDXLClipG,
     t5xxl: Optional[sd3_models.T5XXLModel] = None,
-    device: Optional[torch.device] = None,
-    dtype: Optional[torch.dtype] = None,
 ):
     l_tokens, g_tokens, t5_tokens = tokenizer.tokenize_with_weights(prompt)
-    return get_cond_from_tokens(
-        l_tokens, g_tokens, t5_tokens, clip_l, clip_g, t5xxl, device=device, dtype=dtype
-    )
+    return get_cond_from_tokens(l_tokens, g_tokens, t5_tokens, clip_l, clip_g, t5xxl)
 
 
 def get_cond_from_tokens(
@@ -236,21 +231,11 @@ def get_cond_from_tokens(
     clip_l: sd3_models.SDClipModel,
     clip_g: sd3_models.SDXLClipG,
     t5xxl: Optional[sd3_models.T5XXLModel] = None,
-    device: Optional[torch.device] = None,
-    dtype: Optional[torch.dtype] = None,
 ):
     l_out, l_pooled = clip_l.encode_token_weights(l_tokens)
     g_out, g_pooled = clip_g.encode_token_weights(g_tokens)
     lg_out = torch.cat([l_out, g_out], dim=-1)
     lg_out = torch.nn.functional.pad(lg_out, (0, 4096 - lg_out.shape[-1]))
-    if device is not None:
-        lg_out = lg_out.to(device=device)
-        l_pooled = l_pooled.to(device=device)
-        g_pooled = g_pooled.to(device=device)
-    if dtype is not None:
-        lg_out = lg_out.to(dtype=dtype)
-        l_pooled = l_pooled.to(dtype=dtype)
-        g_pooled = g_pooled.to(dtype=dtype)
 
     # t5xxl may be in another device (eg. cpu)
     if t5_tokens is None:
@@ -261,10 +246,6 @@ def get_cond_from_tokens(
         t5_out, _ = t5xxl.encode_token_weights(
             t5_tokens
         )  # t5_out is [1, 77, 4096], t5_pooled is None
-        if device is not None:
-            t5_out = t5_out.to(device=device)
-        if dtype is not None:
-            t5_out = t5_out.to(dtype=dtype)
 
     # return torch.cat([lg_out, t5_out], dim=-2), torch.cat((l_pooled, g_pooled), dim=-1)
     return lg_out, t5_out, torch.cat((l_pooled, g_pooled), dim=-1)
@@ -364,45 +345,45 @@ class ModelSamplingDiscreteFlow:
         sigs += [0.0]
         return torch.FloatTensor(sigs)
 
+    def max_denoise(self, sigmas: torch.FloatTensor):
+        max_sigma = float(self.sigma_max)
+        sigma = float(sigmas[0])
+        return math.isclose(max_sigma, sigma, rel_tol=1e-5) or sigma > max_sigma
+
 
 # endregion
 
 
 def setup_logging(args=None, log_level=None, reset=False):
-    if logging.root.handlers:
-        if reset:
-            # remove all handlers
-            for handler in logging.root.handlers[:]:
-                logging.root.removeHandler(handler)
-        else:
-            return
+    # Remove all handlers if reset is True
+    if logging.root.handlers and reset:
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+    elif logging.root.handlers:
+        return
 
-    # log_level can be set by the caller or by the args, the caller has priority. If not set, use INFO
-    if log_level is None and args is not None:
-        log_level = args.console_log_level
+    # Determine log level
     if log_level is None:
-        log_level = "INFO"
-    log_level = getattr(logging, log_level)
+        log_level = getattr(logging, args.console_log_level, "INFO") if args else "INFO"
+    log_level = getattr(logging, log_level.upper(), logging.INFO)
 
     msg_init = None
-    if args is not None and args.console_log_file:
+    handler = None
+
+    if args and args.console_log_file:
         handler = logging.FileHandler(args.console_log_file, mode="w")
     else:
-        handler = None
         if not args or not args.console_log_simple:
             try:
                 from rich.logging import RichHandler
                 from rich.console import Console
-                from rich.logging import RichHandler
 
                 handler = RichHandler(console=Console(stderr=True))
             except ImportError:
-                # print("rich is not installed, using basic logging")
                 msg_init = "rich is not installed, using basic logging"
 
         if handler is None:
-            handler = logging.StreamHandler(sys.stdout)  # same as print
-            handler.propagate = False
+            handler = logging.StreamHandler(sys.stdout)
 
     formatter = logging.Formatter(
         fmt="%(message)s",
@@ -412,6 +393,6 @@ def setup_logging(args=None, log_level=None, reset=False):
     logging.root.setLevel(log_level)
     logging.root.addHandler(handler)
 
-    if msg_init is not None:
+    if msg_init:
         logger = logging.getLogger(__name__)
         logger.info(msg_init)
